@@ -1,0 +1,16 @@
+[package]
+name = "recipie-box"
+version = "0.1.0"
+authors = ["Andrew Swerlick <andrew.swerlick@hbdi.com>"]
+edition = "2018"
+
+[dependencies]
+Inflector = "*"
+term = "*"
+comrak = "0.6"
+difference = "2.0"
+scraper = "0.11.0"
+pest = "2.1.2"
+pest_derive = "2.1.0"
+derive_builder = "0.8.0"
+fraction = "0.6.2"

@@ -1,0 +1,31 @@
+WHITESPACE = _{ " " }
+
+ingredient = { amount? ~ maybe_plural_unit? ~ alt_measurement? ~ item }
+
+amount = { non_integer | integer | descriptive  }
+
+integer = ${ ASCII_DIGIT+ }
+
+non_integer = ${ (integer ~ WHITESPACE ~ fraction) | fraction }
+
+descriptive = { "a" | "some" }
+
+alt_measurement = @{ "(" ~ char* ~ ")" }
+
+char = { !("(" | ")") ~ ANY }
+
+fraction = { unicode | multi_part }
+
+multi_part = { integer ~ "/" ~ integer }
+
+unicode = { '\u{BC}'..'\u{BE}' | '\u{2153}'..'\u{215E}' }
+
+maybe_plural_unit = { unit ~ plural }
+
+unit = { ("block" | "tablespoon" | "cup" | "teaspoon" | "bunch" | "handful") }
+
+
+
+plural= ${("s" | "es")?}
+
+item = { ANY+ }
