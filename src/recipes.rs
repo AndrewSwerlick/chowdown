@@ -286,12 +286,17 @@ pub fn extract_recipe_from_html(html: String) -> Result<Recipe, String> {
 
 #[cfg(test)]
 mod tests {
-    use crate::recipes::{extract_recipe_from_html};
+    use crate::recipes::extract_recipe_from_html;
+    use comrak::arena_tree::NodeEdge;
+    use comrak::nodes::{AstNode, ListType, NodeValue};
+    use comrak::{parse_document, format_commonmark, Arena, ComrakOptions};
     use difference::{Changeset, Difference};
+    use std::cell::{Ref, RefCell};
     use std::fs;
+    use std::str;
     use term;
 
-    fn diff_text(left: &String, right: &String){
+    fn diff_text(left: &String, right: &String) {
         // diffing
         let Changeset { diffs, .. } = Changeset::new(left, right, "");
         let mut t = term::stdout().unwrap();
@@ -314,8 +319,89 @@ mod tests {
         }
     }
 
+    fn collect_nodes<'a>(node: &'a AstNode<'a>, items: &mut Vec<&AstNode<'a>>) {
+        for c in node.children() {
+            items.push(c);
+            collect_nodes(c, items);
+        }
+    }
+
     #[test]
-    fn scratch() {}
+    fn scratch() {
+        let arena = Arena::new();
+        let root = parse_document(
+            &arena,
+            &fs::read_to_string("fixtures/sample.md").unwrap(),
+            &ComrakOptions::default(),
+        );
+        let mut nodes = Vec::new();
+        collect_nodes(root, &mut nodes);
+        let ingredient_lists: Vec<Result<String, _>> = nodes
+            .into_iter()
+            .filter(|node| match node.data.borrow().value {
+                NodeValue::List(list) => list.list_type == ListType::Bullet,
+                _ => false,
+            })
+            .flat_map(|node| {
+                node.children().map(|c| {
+                    let mut text = vec![];
+                    let val = match c.data.borrow().value {
+                        NodeValue::Item(_) => format_commonmark(c, &ComrakOptions::default(), &mut text),
+                        _ => Ok(()),
+                    };
+                    String::from_utf8(text)
+                })
+            })
+            .collect();
+
+        println!("{:#?}", ingredient_lists);
+
+        // let first_break = root
+        //     .traverse()
+        //     .find(|node| match node {
+        //         NodeEdge::Start(inner) => {
+        //             let node_inner = &inner.data;
+        //             let value = Ref::map(node_inner.borrow(), |t| &t.value);
+        //             match *value {
+        //                 NodeValue::ThematicBreak => true,
+        //                 _ => false,
+        //             }
+        //         }
+        //         NodeEdge::End(_) => false,
+        //     })
+        //     .unwrap();
+        // let elements = if let NodeEdge::Start(t_break) = first_break {
+        //     t_break.preceding_siblings().filter(|node| {
+        //         println!("{:#?}", node);
+        //         match &node.data.borrow().value {
+        //             NodeValue::List(list) => list.list_type == ListType::Bullet,
+        //             _ => false,
+        //         }
+        //     });
+        // };
+
+        // println!("{:#?}", elements)
+
+        // let instructions_header = root.traverse().for_each(|node|{
+        //     match node {
+        //         NodeEdge::Start(inner) => println!("{:#?}", inner.data.borrow().value),
+        //         _ => ()
+        //     }
+        // });
+        //println!("{:#?}", instructions_header);
+        // Find the header with text value ingredeints
+        // iter_nodes(root, &|node| {
+        //     match node.data.borrow().value {
+        //         NodeValue::List(..) => {
+        //             println!("{:#?}", node.data.borrow().value);
+        //             println!("{:#?}",str::from_utf8(&node.previous_sibling().unwrap().data.borrow().content))
+        //         }
+        //         _ => (),
+        //     }
+        // });
+
+        //println!("{:#?}", root)
+    }
 
     #[test]
     fn test_extract_recipe_from_html() {
