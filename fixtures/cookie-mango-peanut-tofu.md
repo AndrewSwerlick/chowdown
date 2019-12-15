@@ -20,7 +20,7 @@
 - 2 tablespoons lime juice
 - 1/4 teaspoon fine sea salt
 - 2 cups shredded purple or green cabbage
-- 1 handful of chopped roasted peanuts, for garnish
+- 1 handful chopped roasted peanuts, for garnish
 
 # Instructions
 

@@ -20,7 +20,7 @@ multi_part = { integer ~ "/" ~ integer }
 
 unicode = { '\u{BC}'..'\u{BE}' | '\u{2153}'..'\u{215E}' }
 
-maybe_plural_unit = { unit ~ plural }
+maybe_plural_unit = { unit ~ plural ~ "of"?}
 
 unit = { ("block" | "tablespoon" | "cup" | "teaspoon" | "bunch" | "handful") }
 
