@@ -1,3 +1,5 @@
+use comrak::nodes::{AstNode, ListType, NodeValue};
+use comrak::{format_commonmark, parse_document, Arena, ComrakOptions};
 use derive_builder::Builder;
 use fraction::Ratio;
 use inflector::Inflector;
@@ -5,6 +7,7 @@ use pest::iterators::Pair;
 use pest::Parser;
 use pest_derive::Parser;
 use scraper::{Html, Selector};
+use std::convert::TryFrom;
 use std::fmt;
 
 #[derive(Parser)]
@@ -140,7 +143,7 @@ impl fmt::Display for Amount {
     }
 }
 
-#[derive(Debug, Builder)]
+#[derive(Debug, Builder, Clone)]
 pub struct Ingredient {
     raw: String,
     item: String,
@@ -150,8 +153,9 @@ pub struct Ingredient {
 impl From<String> for Ingredient {
     fn from(text: String) -> Self {
         let downcased = text.to_ascii_lowercase();
+
         let parsed = IngredientParser::parse(Rule::ingredient, &downcased)
-            .expect("could not parser ingredient")
+            .expect("Ingredient parsing failed")
             .next()
             .unwrap();
 
@@ -196,18 +200,20 @@ impl fmt::Display for Ingredient {
 
 #[derive(Debug)]
 pub struct Recipe {
-    ingredients: Vec<Ingredient>,
+    ingredients: Vec<(String, Vec<Ingredient>)>,
     instructions: Vec<String>,
 }
 
 impl fmt::Display for Recipe {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut text = String::new();
-        text.push_str("# Ingredients\n\n");
-        for ingredient in &self.ingredients {
-            text.push_str("- ");
-            text.push_str(&ingredient.to_string());
-            text.push_str("\n");
+        for (title, ingredients) in &self.ingredients {
+            text.push_str(&format!("# {}\n\n", title));
+            for ingredient in ingredients {
+                text.push_str("- ");
+                text.push_str(&ingredient.to_string());
+                text.push_str("\n");
+            }
         }
         text.push_str("\n# Instructions\n\n");
         for (i, instruction) in self.instructions.iter().enumerate() {
@@ -219,13 +225,81 @@ impl fmt::Display for Recipe {
     }
 }
 
-// impl From<String> for Recipe {
-//     fn from(text: String) -> Self {
+fn collect_nodes<'a>(node: &'a AstNode<'a>, items: &mut Vec<&AstNode<'a>>) {
+    for c in node.children() {
+        items.push(c);
+        collect_nodes(c, items);
+    }
+}
 
-//     }
-// }
+impl TryFrom<String> for Recipe {
+    type Error = &'static str;
+
+    fn try_from(text: String) -> Result<Self, Self::Error> {
+        let arena = Arena::new();
+        let root = parse_document(&arena, &text, &ComrakOptions::default());
+        let mut nodes = Vec::new();
+        collect_nodes(root, &mut nodes);
+
+        let ingredients_lists: Vec<(String, Vec<Ingredient>)> = nodes
+            .into_iter()
+            .filter(|node| match node.data.borrow().value {
+                NodeValue::List(list) => list.list_type == ListType::Bullet,
+                _ => false,
+            })
+            .map(|list_node| {
+                let header = list_node.preceding_siblings().find(|sib_node| {
+                    match sib_node.data.borrow().value {
+                        NodeValue::Heading(_) => true,
+                        _ => false,
+                    }
+                });
+                let header_text = match header {
+                    None => "Ingredients".to_string(),
+                    Some(header_node) => {
+                        let mut header_text = vec![];
+                        format_commonmark(header_node, &ComrakOptions::default(), &mut header_text)
+                            .expect("error converinting back to markdown");
+                        String::from_utf8(header_text).unwrap()
+                    }
+                };
+
+                let list = list_node
+                    .children()
+                    .map(|c| {
+                        let mut text = vec![];
+                        match c.data.borrow().value {
+                            NodeValue::Item(_) => format_commonmark(
+                                c.children().next().unwrap(),
+                                &ComrakOptions::default(),
+                                &mut text,
+                            )
+                            .expect("Error converting back to markdown"),
+                            _ => (),
+                        };
+                        Ingredient::from(String::from_utf8(text).unwrap().trim().to_string())
+                    })
+                    .collect();
+                (header_text, list)
+            })
+            .collect();
+
+        let recipie = Recipe {
+            ingredients: ingredients_lists,
+            instructions: ["".to_string()].to_vec(),
+        };
+        // TODO return error if we can't find any ingredients or instructions
+        Ok(recipie)
+    }
+}
 
 fn parse_non_integer(non_integer: Pair<'_, Rule>) -> Quantity {
+    // There are a lot of unwraps in this function, but I think they're
+    // All justified. In general the input for this function should
+    // be constrained by the fact that these pairs come from our pest rules
+    // which ensures they'll be safe for the various parsing operations we perform.
+    // If any of these parsing or tree walking unwraps fails, that suggests a
+    // problem with our pest rules.
     let sum = non_integer
         .into_inner()
         .map(|part| match part.as_rule() {
@@ -279,21 +353,17 @@ pub fn extract_recipe_from_html(html: String) -> Result<Recipe, String> {
         .collect();
 
     Ok(Recipe {
-        ingredients: items,
+        ingredients: [("Ingredients".to_string(), items)].to_vec(),
         instructions: instructions,
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::recipes::extract_recipe_from_html;
-    use comrak::arena_tree::NodeEdge;
-    use comrak::nodes::{AstNode, ListType, NodeValue};
-    use comrak::{parse_document, format_commonmark, Arena, ComrakOptions};
+    use crate::recipes::{extract_recipe_from_html, Ingredient, Recipe};
     use difference::{Changeset, Difference};
-    use std::cell::{Ref, RefCell};
+    use std::convert::TryFrom;
     use std::fs;
-    use std::str;
     use term;
 
     fn diff_text(left: &String, right: &String) {
@@ -319,95 +389,24 @@ mod tests {
         }
     }
 
-    fn collect_nodes<'a>(node: &'a AstNode<'a>, items: &mut Vec<&AstNode<'a>>) {
-        for c in node.children() {
-            items.push(c);
-            collect_nodes(c, items);
-        }
+    #[test]
+    fn scratch() {
+        let ingred =
+            Ingredient::try_from("This is not an ingredient".to_string()).expect("Failed to parse");
+        println!("{:#?}", ingred)
     }
 
     #[test]
-    fn scratch() {
-        let arena = Arena::new();
-        let root = parse_document(
-            &arena,
-            &fs::read_to_string("fixtures/sample.md").unwrap(),
-            &ComrakOptions::default(),
-        );
-        let mut nodes = Vec::new();
-        collect_nodes(root, &mut nodes);
-        let ingredient_lists: Vec<Result<String, _>> = nodes
-            .into_iter()
-            .filter(|node| match node.data.borrow().value {
-                NodeValue::List(list) => list.list_type == ListType::Bullet,
-                _ => false,
-            })
-            .flat_map(|node| {
-                node.children().map(|c| {
-                    let mut text = vec![];
-                    let val = match c.data.borrow().value {
-                        NodeValue::Item(_) => format_commonmark(c, &ComrakOptions::default(), &mut text),
-                        _ => Ok(()),
-                    };
-                    String::from_utf8(text)
-                })
-            })
-            .collect();
-
-        println!("{:#?}", ingredient_lists);
-
-        // let first_break = root
-        //     .traverse()
-        //     .find(|node| match node {
-        //         NodeEdge::Start(inner) => {
-        //             let node_inner = &inner.data;
-        //             let value = Ref::map(node_inner.borrow(), |t| &t.value);
-        //             match *value {
-        //                 NodeValue::ThematicBreak => true,
-        //                 _ => false,
-        //             }
-        //         }
-        //         NodeEdge::End(_) => false,
-        //     })
-        //     .unwrap();
-        // let elements = if let NodeEdge::Start(t_break) = first_break {
-        //     t_break.preceding_siblings().filter(|node| {
-        //         println!("{:#?}", node);
-        //         match &node.data.borrow().value {
-        //             NodeValue::List(list) => list.list_type == ListType::Bullet,
-        //             _ => false,
-        //         }
-        //     });
-        // };
-
-        // println!("{:#?}", elements)
-
-        // let instructions_header = root.traverse().for_each(|node|{
-        //     match node {
-        //         NodeEdge::Start(inner) => println!("{:#?}", inner.data.borrow().value),
-        //         _ => ()
-        //     }
-        // });
-        //println!("{:#?}", instructions_header);
-        // Find the header with text value ingredeints
-        // iter_nodes(root, &|node| {
-        //     match node.data.borrow().value {
-        //         NodeValue::List(..) => {
-        //             println!("{:#?}", node.data.borrow().value);
-        //             println!("{:#?}",str::from_utf8(&node.previous_sibling().unwrap().data.borrow().content))
-        //         }
-        //         _ => (),
-        //     }
-        // });
-
-        //println!("{:#?}", root)
+    fn test_recipe_from_string() {
+        let recipe = Recipe::try_from(fs::read_to_string("fixtures/sample.md").unwrap()).unwrap();
+        assert_eq!(recipe.ingredients.len(), 2)
     }
 
     #[test]
     fn test_extract_recipe_from_html() {
         let html = fs::read_to_string("fixtures/cookie-mango-peanut-tofu.html").unwrap();
         let recipie = extract_recipe_from_html(html).unwrap();
-        assert_eq!(recipie.ingredients.len(), 21);
+        assert_eq!(recipie.ingredients.first().unwrap().1.len(), 21);
     }
 
     #[test]
