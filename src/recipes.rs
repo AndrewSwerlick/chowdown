@@ -7,6 +7,9 @@ use pest::iterators::Pair;
 use pest::Parser;
 use pest_derive::Parser;
 use scraper::{Html, Selector};
+use select::document::Document;
+use select::predicate::{Predicate, Attr, Class, Name};
+
 use std::convert::TryFrom;
 use std::fmt;
 
@@ -338,15 +341,22 @@ fn parse_non_integer(non_integer: Pair<'_, Rule>) -> Quantity {
     Quantity::Fractional(sum)
 }
 
-pub fn extract_recipe_from_html(html: String) -> Result<Recipe, String> {
-    let document = Html::parse_document(&html);
-    let selector = Selector::parse(".tasty-recipe-ingredients li").unwrap();
-    let items = document
-        .select(&selector)
+pub fn extract_recipe_from_html(html: String, selector_str: &str) -> Result<Recipe, String> {
+    let document = Document::from(&html);
+    let selector = Selector::parse(format!("{} ul", selector_str).as_str()).unwrap();
+    let ingredient_lists = document.select(&selector);
+
+    let ingredients = ingredient_lists.map(|list| {
+        let header_selector = Selector::parse(format!("{} ul", selector_str).as_str()).unwrap();
+
+        // find header 
+        // build list
+    })
+    let items
         .map(|ingredient| Ingredient::from(ingredient.text().collect::<Vec<_>>().join("")))
         .collect();
 
-    let instructions_selector = Selector::parse(".tasty-recipe-instructions li").unwrap();
+    let instructions_selector = Selector::parse(format!("{} ol", selector_str).as_str()).unwrap();
     let instructions = document
         .select(&instructions_selector)
         .map(|instructions| instructions.text().collect::<Vec<_>>().join(""))
@@ -405,14 +415,15 @@ mod tests {
     #[test]
     fn test_extract_recipe_from_html() {
         let html = fs::read_to_string("fixtures/cookie-mango-peanut-tofu.html").unwrap();
-        let recipie = extract_recipe_from_html(html).unwrap();
+        let recipie = extract_recipe_from_html(html, "#tasty-recipes-33936").unwrap();
+        println!("{:#?}", recipie);
         assert_eq!(recipie.ingredients.first().unwrap().1.len(), 21);
     }
 
     #[test]
     fn test_to_string() {
         let html = fs::read_to_string("fixtures/cookie-mango-peanut-tofu.html").unwrap();
-        let recipie = extract_recipe_from_html(html).unwrap();
+        let recipie = extract_recipe_from_html(html, "#tasty-recipes-33936").unwrap();
         let text = recipie.to_string();
         let fixture_text = fs::read_to_string("fixtures/cookie-mango-peanut-tofu.md").unwrap();
 
